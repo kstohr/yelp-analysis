@@ -1,0 +1,134 @@
+---
+title: "Yelp Challenge Data Set - Exploratory Analysis"
+author: "Kate Stohr"
+date: "November 2, 2015"
+output: html_document
+---
+
+```{r}
+options(digits=4, scipen=999)
+setwd("~/Documents/Coursera/Capstone/project")
+```
+
+# Let's play with the business data
+
+```{r}
+library(jsonlite)
+library(dplyr)
+library(ggmap)
+library(leaflet)
+library(maps)
+library(scales)
+dir.data <-file.path('.', 'data', 'yelp_dataset_challenge_academic_dataset')
+```
+
+##Load the data 
+
+```{r cache=TRUE, echo=FALSE}
+bus.fn<-'yelp_academic_dataset_business.json'
+bus.df <- stream_in(file(file.path(dir.data, bus.fn)))
+bus <- flatten(bus.df)
+rm(bus.df)
+bus$cat <- sapply(bus$categories, toString)
+```
+
+```{r cache=TRUE, echo=FALSE}
+checkin.fn<-'yelp_academic_dataset_checkin.json'
+checkin.df <- stream_in(file(file.path(dir.data, checkin.fn)))
+checkin <- flatten(checkin.df)
+rm(checkin.df)
+
+```
+
+```{r eval=FALSE, echo=FALSE, cache=TRUE}
+##NOT NEEDED 
+tip.fn<-'yelp_academic_dataset_tip.json'
+tip.df <- stream_in(file(file.path(dir.data, tip.fn)))
+rm(tip.df)
+#no need to flatten 
+```
+
+```{r eval=FALSE, echo=FALSE, cache=TRUE}
+user.fn<-'yelp_academic_dataset_user.json'
+user.df <- stream_in(file(file.path(dir.data, user.fn)))
+user <- flatten(user.df)
+rm(user.df)
+```
+
+```{r eval=FALSE, echo=FALSE, cache=TRUE}
+review.fn<-'yelp_academic_dataset_review.json'
+review.df <- stream_in(file(file.path(dir.data, review.fn)))
+review.df.flat <- flatten(review.df)
+rm(review.df)
+review<-review.df.flat
+```
+
+Save files to RDS for future access. 
+```{r eval=FALSE, echo=FALSE, cache=TRUE}
+saveRDS(bus.df.flat, file.path(dir.data, "bus.rds"))
+saveRDS(checkin.df.flat, file.path(dir.data, "checkin.rds"))
+saveRDS(review.df.flat, file.path(dir.data, "review.rds"))
+```
+
+
+## Exploratory plotting
+Build a basic map of the business data. 
+```{r}
+map("world", ylim=c(10,70), xlim=c(-130,25), col="gray60")
+points(bus$longitude, bus$latitude,pch=19, col="cyan4")
+```
+
+Identify metro areas by using kmeans clustering to isolate nearby lat/long coordinates. 
+
+```{r, echo=FALSE}
+cities<-c('Edinburgh, UK', 'Karlsruhe, Germany', 'Montreal, Canada', 'Waterloo, Canada', 'Pittsburgh, PA', 'Charlotte, NC', 'Urbana-Champaign, IL', 'Phoenix, AZ', 'Las Vegas, NV', 'Madison, WI')
+city.centres<-geocode(cities)
+set.seed(222)
+geo.cluster<-kmeans(bus[,c('longitude','latitude')],city.centres) #use kmeans to identify metro areas
+```
+
+Subset by metro area. Explore data for Philadelphia. 
+
+```{r, echo=FALSE}
+bus_by_cluster <- as.data.frame(cbind(bus, geo.cluster$cluster)) #Merge cluster assignment back to business data
+buscl_5<-subset(bus, geo.cluster$cluster==5) #Pull data for Philadelphia
+m5 <- leaflet() %>%
+  addTiles() %>%  # Add default OpenStreetMap map tiles
+  addMarkers(lng=buscl_5$longitude, lat=buscl_5$latitude, popup=buscl_5$name)
+print(m5)
+```
+
+Take a look for matching businesses in the check-in data set. 
+
+```{r}
+
+checkinpa<-buscl_5$business_id %in% checkin$business_id  #isolate the Philly bus id's in checkins. 
+
+checkcl_5<-checkin[checkinpa,] #subset to include matching ids. 
+percent_checkins_pa<-length(checkcl_5)/length(buscl_5)
+percent(percent_checkins_pa)
+checkcl_5$total<-rowSums(checkcl_5[,3:170], na.rm = TRUE)
+checkcl_5<-cbind(business_id=checkcl_5$business_id, total_checkins=checkcl_5$total)
+checkinpa<-merge(buscl_5, checkcl_5, by = "business_id")
+checkinpa$total_checkins<-as.numeric(checkinpa$total_checkins)
+quants<-quantile(checkinpa$total_checkins)
+quants
+```
+
+
+```{r}
+#check to see if  checkin points are grouped in anyway. 
+m5_checkins <- leaflet() %>%
+  addTiles() %>%  # Add default OpenStreetMap map tiles
+  addCircleMarkers(lng=checkinpa$longitude, lat=checkinpa$latitude, popup=checkinpa$name, color = c('red'), stroke = FALSE, fillOpacity = 0.5, radius = 2, group = "Check-ins")
+print(m5_checkins)
+```
+
+High frequency checkins align with traffic arteries, which makes sense. 
+
+NOTES:
+rgeos::gDistance dist parameter for a cutoff distance. 
+Would be good to add a later for commercial zoning. Would be interesting to condition checkins on weather /seasonality. 
+
+
+
