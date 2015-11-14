@@ -7,7 +7,7 @@ output: html_document
 
 ```{r}
 options(digits=4, scipen=999)
-setwd("~/Documents/Coursera/Capstone/project")
+setwd("~/Documents/Coursera/Capstone/yelp-analysis")
 ```
 
 # Let's play with the business data
@@ -41,14 +41,15 @@ rm(checkin.df)
 ```
 
 ```{r eval=FALSE, echo=FALSE, cache=TRUE}
-##NOT NEEDED 
+
 tip.fn<-'yelp_academic_dataset_tip.json'
 tip.df <- stream_in(file(file.path(dir.data, tip.fn)))
-rm(tip.df)
+tip<-tip.df
 #no need to flatten 
 ```
 
 ```{r eval=FALSE, echo=FALSE, cache=TRUE}
+##NOT NEEDED 
 user.fn<-'yelp_academic_dataset_user.json'
 user.df <- stream_in(file(file.path(dir.data, user.fn)))
 user <- flatten(user.df)
@@ -56,6 +57,7 @@ rm(user.df)
 ```
 
 ```{r eval=FALSE, echo=FALSE, cache=TRUE}
+##NOT NEEDED 
 review.fn<-'yelp_academic_dataset_review.json'
 review.df <- stream_in(file(file.path(dir.data, review.fn)))
 review.df.flat <- flatten(review.df)
@@ -98,16 +100,28 @@ m5 <- leaflet() %>%
 print(m5)
 ```
 
-Take a look for matching businesses in the check-in data set. 
+Checkout the checkin data set 
 
 ```{r}
+checkin$total<-rowSums(checkin[,3:170], na.rm = TRUE)
+summary(checkin$total) #ignore NA's
 
+checkin$total<-rowSums(checkin[,3:170], na.rm = FALSE)
+summary(checkin$total)#include NA's
+
+```
+
+
+
+Take a look for Philly businesses in the check-in data set. 
+
+```{r}
 checkinpa<-buscl_5$business_id %in% checkin$business_id  #isolate the Philly bus id's in checkins. 
 
 checkcl_5<-checkin[checkinpa,] #subset to include matching ids. 
 percent_checkins_pa<-length(checkcl_5)/length(buscl_5)
 percent(percent_checkins_pa)
-checkcl_5$total<-rowSums(checkcl_5[,3:170], na.rm = TRUE)
+checkcl_5$total<-rowSums(checkcl_5[,3:170], na.rm = FALSE)
 checkcl_5<-cbind(business_id=checkcl_5$business_id, total_checkins=checkcl_5$total)
 checkinpa<-merge(buscl_5, checkcl_5, by = "business_id")
 checkinpa$total_checkins<-as.numeric(checkinpa$total_checkins)
@@ -115,20 +129,109 @@ quants<-quantile(checkinpa$total_checkins)
 quants
 ```
 
+Map checkin points to see if they are grouped in anyway. 
 
 ```{r}
-#check to see if  checkin points are grouped in anyway. 
 m5_checkins <- leaflet() %>%
   addTiles() %>%  # Add default OpenStreetMap map tiles
   addCircleMarkers(lng=checkinpa$longitude, lat=checkinpa$latitude, popup=checkinpa$name, color = c('red'), stroke = FALSE, fillOpacity = 0.5, radius = 2, group = "Check-ins")
 print(m5_checkins)
 ```
 
-High frequency checkins align with traffic arteries, which makes sense. 
+High frequency checkins align with traffic arteries.
+
+Overlay checkins on all PA businesses. 
+
+```{r}
+m5_checkins <- leaflet() %>%
+  addTiles() %>%  # Add default OpenStreetMap map tiles
+  addCircleMarkers(lng=buscl_5$longitude, lat=buscl_5$latitude, popup=buscl_5$name, color = c('blue'), stroke = FALSE, fillOpacity = 0.5, radius = 2, group = "All Businesses") %>%
+  addCircleMarkers(lng=checkinpa$longitude, lat=checkinpa$latitude, popup=checkinpa$name, color = c('red'), stroke = FALSE, fillOpacity = 0.5, radius = 2, group = "Check-ins")
+print(m5_checkins)
+```
+
+Interesting. Some businesses have checkin's and some do not. What are the factors that correlate highly with checkins? What factors have a low correlation with checkins? How can business owners benchmark the number of checkins they should expect conditioned on location and business category? Or, conditioned on businesses that are most like them? 
+
+Steps: 
+1) Build a data file that aggregates checkins for each businesses and includes businesses that have no checkins. 
+1. Check on data time period. 
+Unfortunately there are no datetime stamps included in the checkin data. Check other data sets to see what timeframe they represent. 
+
+```{r} 
+## find out what period of time the review data was collected in. 
+review$date<-ymd(review$date)
+min(review$date)
+max(review$date)
+start<-min(review$date)
+end<-max(review$date)
+end - start
+(end-start)/365
+start.yelp<-(ymd("2010-01-15"))
+(end-start.yelp)/365
+```
+
+
+```{r} 
+## find out what period of time the tip data was collected in. 
+tip$date<-ymd(tip$date)
+min(tip$date)
+max(tip$date)
+start<-min(tip$date)
+end<-max(tip$date)
+end - start
+(end-start)/365
+
+```
+
+
+The reviews were collected between the period of Oct. 10, 2004 and Jan. 8, 2015 (10 years and 3 months). Tip data starts in April 15, 2009 and ends on Jan 22, 2015. This roughly corresponds to the period that yelp made its mobile apps available (2008 onwards).  However, Yelp didn't introduce it's checkin feature on the iphone until Jan 15, 2010. So the time period covered can only be just shy of 5 years (4.984 years). 
+
+Therefore, for the purposes of this analysis, we're going to assume that the checkin data is "cumulative" and assume the data covers a 5-year period. Good for interpreting active times, but not for predicting business info, because you can't convert the data into a rate for the specific business as you don't have data on how long businesses have been on Yelp. And the length of time a business has been on yelp is very likely to impact the number of reviews, checkins and tips it has recieved cumulatively.  
+
+Ok, so using the time data, what can we do? Well we can compare the time data to the location of the checkin by cross referencing the business location. Start by mapping just one time range. 
+
+```{r}
+
+m5_checkins <- leaflet() %>%
+  addTiles() %>%  # Add default OpenStreetMap map tiles
+  addCircleMarkers(lng=buscl_5$longitude, lat=buscl_5$latitude, popup=buscl_5$name, color = c('blue'), stroke = FALSE, fillOpacity = 0.5, radius = 2, group = "All Businesses") %>%
+  addCircleMarkers(lng=checkinpa$longitude, lat=checkinpa$latitude, popup=checkinpa$name, color = c('red'), stroke = FALSE, fillOpacity = 0.5, radius = 2, group = "Check-ins")
+print(m5_checkins)
+
+```
+
+
+
+QUESTION: 
+Can I predict what area of the city will get the most check-in's at any given time? Then create a time-series map that allows users to find what will most likely be the most active or least active places in a city at a given time? 
+
+This could be used to allow folks to plan canvasing routes, such as for sales outreach, advocacy campaigns or political campaigns. Or, to identify the best locations for an event. Or, for planning departments to evaluate where to locate public events for maximum impact (to bring people to a place that could be more active) or exposure(hold an event at a time and place where it is most likely to get maximum exposure or least likely to impact traffice, etc.)
+
+Added bonus: Trace a map through the city for maximum exposure in any given day. 
+
+STEPS: 
+
+1) Build the write data frame 
+ - summarize checkin data by location. 
+     
+2) Map the place/s that has the most checkin's at a given time.   
+
+
+     
+
+
+
+2) Include other factors that are available in the bus file. Look at other files to see if there may be factors that are of interest. 
+3) Build a prediction model that finds like businesses (regression? How to test?)
+
+4) Understand time series data for checkins. Is it seasonal? 
+
+5) Build code that averages check in data for like businessses and generates a prediction of average checkins/time period 
+
 
 NOTES:
 rgeos::gDistance dist parameter for a cutoff distance. 
-Would be good to add a later for commercial zoning. Would be interesting to condition checkins on weather /seasonality. 
+Would be good to add a layer for commercial zoning. Would be interesting to condition checkins on weather /seasonality. 
 
 
 
