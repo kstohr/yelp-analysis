@@ -1,0 +1,430 @@
+---
+title: "Yelp Challenge Data Set - Variogram Modeling of Location and Checkins"
+author: "Kate Stohr"
+date: "November 2, 2015"
+output: html_document
+--- 
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+options(digits=4, scipen=999)
+setwd("~/Documents/Coursera/Capstone/yelp-analysis")
+```
+
+
+```{r echo=FALSE}
+library(jsonlite)
+library(dplyr)
+library(ggmap)
+library(leaflet)
+#library(maps)
+library(scales)
+library(lubridate)
+library(reshape2)
+library(caret)
+#library(randomForest)
+library(sp)
+##library(geoR)
+##library(xts)
+##library(spacetime)
+library(gstat)
+library(automap)
+
+dir.data <-file.path('.', 'data', 'yelp_dataset_challenge_academic_dataset')
+```
+
+##Introduction 
+
+This research explores the relationship between checkins and location in the Yelp Data Set Challenge using variogram modeling with the "gstats" package in R. 
+
+Often people need to know the most active areas of a city. This is useful for planning canvasing routes, such as for sales outreach, advocacy campaigns or political campaigns, identifing the best locations for an event, or evaluating foot traffic and commercial real estate values. 
+
+Because checkins are a reflection of an individual at a specific location at a time, it's a reasonable proxy for foot traffic. In this, project I asked the question: Is there a correlation between location and the number of checkins such that it is possible to reasonably predict the number of checkins at a given location? 
+
+Note: Time did not permit  analysing time series models of the same data. Although, that might be a logical next step. 
+
+Data source: http://www.yelp.com/dataset_challenge
+
+#Methods and Data 
+
+Exploring the data, it is not clear over what period of time the checkin data was collected. There is no date time stamp associated with the data. 
+
+The other datasets contain cumulative data. The reviews data was collected between the period of Oct. 10, 2004 and Jan. 8, 2015 (10 years and 3 months). Tip data starts in April 15, 2009 and ends on Jan 22, 2015. This roughly corresponds to the period that yelp made its mobile apps available (2008 onwards). However, Yelp didn't introduce it's checkin feature on the iphone until Jan 15, 2010.  
+
+For the purposes of this analysis, we're going to assume that the checkin data is cumulative over a nearly five year period. The data is stochastic, and binned into time windows (hour/day). 
+
+## Mapping the data 
+After loading and processing the data (view .rmd file for code), I first explored the data by using k means clustering to seperate the locations by city. This resulted in a clean subset of data. I select Pittsburgh, as a city to model as it had approximately an average amount of data as compared to the other cities. 
+
+```{r cache=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+#load business data 
+bus.fn<-'yelp_academic_dataset_business.json'
+bus.df <- stream_in(file(file.path(dir.data, bus.fn)), verbose = FALSE)
+bus <- flatten(bus.df) #flatten nested variables
+rm(bus.df)
+```
+
+```{r cache=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+#load checkin data 
+checkin.fn<-'yelp_academic_dataset_checkin.json'
+checkin.df <- stream_in(file(file.path(dir.data, checkin.fn)), verbose = FALSE)
+checkin <- flatten(checkin.df) #flatten nested variables
+rm(checkin.df)
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#Preprocess the data
+#Convert lists to strings in data. 
+
+bus$cat <- sapply(bus$categories, toString) #unlist catagories
+bus$nabe <- sapply(bus$neighborhoods, toString) #unlist neighborhoods
+ListCols <- sapply(bus, is.list) #three variables are lists,  
+bus<-bus[!ListCols]## remove list variables, including accepts credit cards as unnecessary to analysis.
+bus_var<-names(bus) #get variable names
+bus_var<-make.names(bus_var) #make variable names compliant
+names(bus)<-bus_var
+```
+
+```{r eval=FALSE, echo=FALSE, cache=TRUE, message=FALSE, warning=FALSE}
+#Save file to RDS for future access. 
+#saveRDS(bus, file.path(dir.data, "bus.rds"))
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+#identify metro areas by kmeans clustering
+cities<-c('Edinburgh, UK', 'Karlsruhe, Germany', 'Montreal, Canada', 'Waterloo, Canada', 'Pittsburgh, PA', 'Charlotte, NC', 'Urbana-Champaign, IL', 'Phoenix, AZ', 'Las Vegas, NV', 'Madison, WI')#Cities included in the dataset 
+city.centres<-geocode(cities) #identify longlat of city centers 
+set.seed(222)
+geo.cluster<-kmeans(bus[,c('longitude','latitude')],city.centres) #use kmeans to identify metro areas
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+#subset by metro area 
+
+bus_by_cluster <- as.data.frame(cbind(bus, geo.cluster$cluster)) #serge cluster assignment back to business data
+
+bus_cl_5<-subset(bus, geo.cluster$cluster==5) #select Pittsburgh
+rm(bus_by_cluster)
+```
+ 
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#Process the checkin data set
+#remove Na's
+nas<-is.na(checkin)
+checkin[nas]<-0
+
+#ensure compliant variable names 
+checkin_names<-names(checkin)
+checkin_names<-make.names(checkin_names)
+names(checkin)<-checkin_names
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#save a list of time labels for conversion 
+time_labels<-names(checkin)
+time_labels<-time_labels[3:168]
+write.csv("time_labels", "time_labels")
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#Save checkin file 
+#saveRDS(checkin, file.path(dir.data, "checkin.rds"))
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#merge Pittsburgh business data with checkin data by "business id" 
+checkinIDs_5<- checkin$business_id %in% bus_cl_5$business_id  #isolate the Philly bus id's in checkins. 
+
+check_cl_5<-checkin[checkinIDs_5,] #subset to include matching ids.
+total<-apply(check_cl_5[,3:170],1,sum)#get the total for each row
+#sd(total)
+#avg<-apply(check_cl_5[,3:170],1,mean)
+#mean(avg)
+#max<-apply(check_cl_5[,3:170],1,max)
+#sd<-apply(check_cl_5[,3:170],1,sd)
+#mean(max)
+#check_cl_5<-mutate(check_cl_5, avg=avg, max=max, std.deviation=sd, total=total) #convert to numeric 
+check_cl_5<-mutate(check_cl_5, total=total)
+#quants<-quantile(check_cl_5$total) #check quantiles
+#quants
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# merge Pittsburth data
+merge_cl_5<-merge(bus_cl_5, check_cl_5, by="business_id") #only businesses with checkins
+join_cl_5<-full_join(bus_cl_5, check_cl_5, by="business_id") #all businesses 
+
+```
+
+After merging the Pittsburgh checkin data with the business data by "business_id", I mapped the business information using leaflet, which allows the mapped data to be more readily explored than other mapping tools. 
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#Map of Pittsburgh checkin data 
+m5_checkins <- leaflet() %>%
+  addTiles() %>%  # Add default OpenStreetMap map tiles
+  addCircleMarkers(lng=merge_cl_5$longitude, lat=merge_cl_5$latitude, popup=merge_cl_5$name, color = c('red'), stroke = FALSE, fillOpacity = 0.5, radius = 2, group = "Check-ins")
+print(m5_checkins)
+```
+
+Overlaying businesses with checkins against all Pittsburgh businesses in the data set, one can see that checkins tend to align with traffic arteries. This suggests that there is a correlation between location and checkins. 
+
+```{r message=FALSE, warning=FALSE}
+#Map of Pittsburgh checkin data overlaid on all businesses
+m5_checkins <- leaflet() %>%
+  addTiles() %>%  # Add default OpenStreetMap map tiles
+  addCircleMarkers(lng=bus_cl_5$longitude, lat=bus_cl_5$latitude, popup=bus_cl_5$name, color = c('blue'), stroke = FALSE, fillOpacity = 0.5, radius = 2, group = "All Businesses") %>%
+  addCircleMarkers(lng=merge_cl_5$longitude, lat=merge_cl_5$latitude, popup=merge_cl_5$name, color = c('red'), stroke = FALSE, fillOpacity = 0.5, radius = 2, group = "Check-ins")
+print(m5_checkins)
+```
+
+##Exploratory Modeling
+To establish a baseline, I used some common models to get a sense of the relationships in the data.  
+
+*GLM and Random Forests Models*
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#use only Pittsburgh busineses that have checkin information to increase accuracy and eliminate NA's. 
+dt<- merge(bus_loc_cl_5, check_cl_5, by="business_id")
+test<-is.na(dt)
+#sum(test)
+#test<-nlevels(as.factor(dt$type))
+#test
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#create test and train sets
+set.seed(222)
+
+#training set to 60% for medium sized data sets
+inTrain<-createDataPartition(dt$type, p=0.6, list=FALSE)
+
+#create training and test sets 
+training<-dt[inTrain,]
+testing<-dt[-inTrain,]
+
+#remove unnecessary, non-numeric vectors from the data 
+training<-select(training, -c(type, business_id))
+
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#set the train control methods.  
+
+ctrl <- trainControl(allowParallel=T, method="cv", number=4) #4-fold cross validation with parallel processing
+
+#fit a model with only location data that has checkin information to increase accuracy. 
+
+#use longlat to predict total checkins in a general linear model. 
+fit6 <- train(total ~ longitude + latitude, data=training, trControl=ctrl, method="glm") ## fit model with general linear regression
+
+#use longlat to predict total checkins in a Random Forests model.
+fit7 <- train(total ~ longitude + latitude, data=training, trControl=ctrl, method="rf")
+
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+prediction6 <- predict(fit6, newdata=training)
+acc_test6<-sum(round(prediction6, digits=0) == training$total) / length(prediction6)
+
+prediction7 <- predict(fit7, newdata=training)
+acc_test7<-sum(round(prediction7, digits=0) == training$total) / length(prediction7)
+```
+
+The GLM marginally better, but with only `r percent(acc_test6)` accuracy. The model is producing results that have a much lower standard deviation than the original set. In addition, it skews high on the low end of the scale, giving a false sense of potential traffic at a location. 
+
+Including all factors in the model, shows that a few times do result in statistically significant outcomes, such as midnight on Saturday, for example. So the low accuracy could also be result of a lack of datapoints for certain time periods. 
+
+```{r message=FALSE, warning=FALSE}
+#summary of model results
+#summary(prediction6)
+#summary(training$total)
+percent(acc_test6)
+percent(acc_test7)
+sd(prediction6)
+sd(training$total)
+```
+
+Neither Random Forest or GLM models perform well. The p-values are very high indicating that the results may as well be random. This is likely because the model is not recognizing the spatial/time nature of the data. 
+
+*Variogram Model*
+
+To better model the spatial nature of the data, I turned to a variogram model which allows the points (locations) to be projected onto a grid and then values for the variable to be assigned to areas on the grid accordingly.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# Process the data for use in variogram model, include all businesses 
+
+#Get business Ids and location info from business data for cluster 5 (Pittsburgh). 
+bus_loc_cl_5<-select(bus_cl_5, c(business_id, latitude, longitude))
+
+#merge location data with checkin data for cluster 5 
+dt<- full_join(bus_loc_cl_5, check_cl_5, by="business_id") #all businesses 
+
+#input NAs to "no.checkin" for variable type (checkin_status)
+checkin_status<-dt$type
+nas<-is.na(checkin_status)
+checkin_status[nas]<-"no.checkin"
+dt$type<-checkin_status 
+
+#input Nas to "0" for businesses with no checkin data
+nas<-is.na(dt)
+dt[nas]<-0
+
+#remove unnecessary ID variable 
+dt<-select(dt, -business_id)
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#melt the data to allow for time series variogram in future analysis
+dt_melt<-melt(dt, id.vars = c("type", "latitude", "longitude"), variable.name = "time", value.name = "checkins")
+dt_melt$time<-gsub("checkin_info.", "", dt_melt$time)
+dt<-dt_melt
+```
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+##Convert time period to POSIXlt NOTE: NOT PERFORMED. RESULTED IN ERRORS. WILL TEST SPATIAL CORRELATION FIRST. EVALUATE TIME CORRELATION IF SPATIAL CORRELATION IS POSITIVE.
+##times<-dt_melt$time
+##times<-strptime(times, format = "%H.%w") 
+#NOTE although the format is specified correctly, the timestamp is missing day info and time info is incorrectly parsed. ("0" results in NA.) 
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#partition the data into training and test sets 
+set.seed(222)
+
+#training set to 60% for medium sized data sets
+inTrain<-createDataPartition(dt$type, p=0.6, list=FALSE)
+
+#create training and test sets 
+training<-dt[inTrain,]
+testing<-dt[-inTrain,]
+
+#remove unnecessary, non-numeric vectors from the data 
+training<-select(training, -c(type, time)) #removed time variable for now. 
+
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+##convert training data to spdf format
+
+#Proj4js.defs["EPSG:26917"] = "+proj=utm +zone=17 +ellps=GRS80 +datum=NAD83 +units=m +no_defs";
+#Source = http://spatialreference.org/ref/epsg/nad83-utm-zone-17n/
+
+coordinates(training) = ~longitude+latitude
+proj4string(training) <- "+proj=longlat +zone=17 +datum=NAD83" #projection system to be used for projecting the points to the grid. 
+```
+
+With the data projected, it's possible to plot a 'bubble' map which shows the value of the checkin variable at various places on the map. High checkin numbers appear to be clusetered. In other words, the number of checkins at a location appears inversely proportional to the distance between nearby points. 
+
+```{r message=FALSE, warning=FALSE}
+#map the data to check on values at various points. 
+ b<-bubble(training, "checkins", col=c("#00ff0088", "#00ff0088"), main = "Number of Checkins")
+b
+```
+
+Next I create a 'grid' against which to plot the data. Coordinates of the grid are obtained from the boundary points of the data set. A map of the points against the boundary diagonal shows the data fits the grid. 
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#create grid against which to project location points (Pittsburgh)
+
+x1<-min(dt$longitude)
+x2<-max(dt$longitude)
+y1<-min(dt$latitude)
+y2<-max(dt$latitude)
+xc<-seq(x1,x2, by = 0.025)
+yc<-seq(y1,y2, by = 0.0165)
+city.grid<-as.data.frame(cbind(xc,yc))
+coordinates(city.grid) = ~xc+yc
+proj4string(city.grid) <- "+proj=longlat +zone=17 +datum=NAD83" #project points
+gridded(city.grid)=TRUE
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE} 
+#map points against grid to confirm grid location is correct. 
+m10 <- leaflet() %>%
+  addTiles() %>%  # Add default OpenStreetMap map tiles
+  addCircleMarkers(data=city.grid) %>%
+  addCircleMarkers(data=as.data.frame(training), color = c('yellow'), stroke = FALSE, fillOpacity = 0.5, radius = 2, group = "All Businesses")
+print(m10)
+```
+
+To build the model, first create a variogram of the projected data. 
+
+```{r cache=TRUE, message=FALSE, warning=FALSE}
+auto.vgm = autofitVariogram(checkins~1, training) #variogram of checkins 
+plot(auto.vgm)
+#nugget = 114, #sill=114, range=2.7
+```
+
+The variogram shows that most locations have a variance of 2-4 checkins within an 8km distance of each other. The number of checkins taper off the further the points are away from each other. Given this, the model needs to be adjusted to take into account that the checkins are clustered around the city center. Taking the log of the checkin values and the squareroot of the distance value will result in a more linear model that better reflects this inverse relationship. 
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#calculate distance from city center 
+city.centre.5<-city.centres[5,] #coordinates for the center of Pittsburgh. 
+coordinates(city.centre.5) =~lon+lat #project 
+proj4string(city.centre.5) <- "+proj=longlat +zone=17 +datum=NAD83" #project points
+dist.spdf<-spDistsN1(as.matrix(training@coords), as.matrix(city.centre.5@coords), longlat=TRUE) #calculate distance
+dist<-as.datatrame(dist.spdf) #subset results
+dist.training<-mutate(as.data.frame(training), dist=unlist(dist$dist.spdf)) #add to training data
+coordinates(dist.training) =~longitude+latitude #reproject training data
+proj4string(dist.training) <- "+proj=longlat +zone=17 +datum=NAD83"
+training<-dist.training
+```
+
+
+```{r}
+#create model using lof of checkins and sqrt of distance to city center. 
+log.vgm = autofitVariogram(log(checkins)~sqrt(dist), training) #variogram of log 
+plot(log.vgm)
+```
+
+
+From the empirical semivariogram plot and the information contained in the semivariog gstat object, we can estimate the sill, range and nugget to use in our model semivariogram.
+
+In this case, the range (the point on the distance axis where the semivariogram starts to level off) is around the value of the last lag - 8.6588 - so we’ll use Range = 9. The Sill (the point on the y axis where the semivariogram starts to level off) is around 2.4 The nugget looks to be around 2.0 (so the partial sill is around 2.2).
+
+Using this information we’ll generate a model semivariogram using the vgm() function in gstat. 
+
+```{r}
+# create a variogram model based on Sphere. 
+sph.vgm<-vgm(psill=2.6, model="Sph", nugget=2.0, range=9)
+exp.vgm<-vgm(psill=2.6, model="Exp", nugget=2.0, range=9)
+wav.vgm<-vgm(psill=2.2, model="Wav", nugget=2.0, range=9)
+
+# fit the empirical data to the model 
+fit.sph.vgm<-fit.variogram(lc.vgm, sph.vgm)
+fit.exp.vgm<-fit.variogram(lc.vgm, exp.vgm)
+fit.hol.vgm<-fit.variogram(lc.vgm, hol.vgm)
+fit.hol.vgm<-fit.variogram(lc.vgm, wav.vgm)
+
+#plot models
+plot(lc.vgm, fit.sph.vgm)
+plot(lc.vgm, fit.exp.vgm)
+plot(lc.vgm, fit.hol.vgm)
+```
+
+
+
+
+
+
+
+
+
+## Results 
+Describe what you found through your analysis of the data.
+
+## Discussion 
+Explain how you interpret the results of your analysis and what the implications are for your question/problem.
+
+Looking at the data, there is probably some adjustment to be made for the season that the checkin was made. That information is not available. The results are skewed by this. 
+
+-----
+
+NOTES:
+rgeos::gDistance dist parameter for a cutoff distance. 
+Would be good to add a layer for commercial zoning. Would be interesting to condition checkins on weather /seasonality. 
+
+SLUSH: 
+
+
+

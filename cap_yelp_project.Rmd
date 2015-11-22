@@ -3,7 +3,7 @@ title: "Yelp Challenge Data Set - Exploratory Analysis"
 author: "Kate Stohr"
 date: "November 2, 2015"
 output: html_document
----
+--- 
 
 ```{r}
 options(digits=4, scipen=999)
@@ -19,6 +19,12 @@ library(ggmap)
 library(leaflet)
 library(maps)
 library(scales)
+library(lubridate)
+library(caret)
+library(randomForest)
+library(sp)
+library(geoR)
+
 dir.data <-file.path('.', 'data', 'yelp_dataset_challenge_academic_dataset')
 ```
 
@@ -29,8 +35,19 @@ bus.fn<-'yelp_academic_dataset_business.json'
 bus.df <- stream_in(file(file.path(dir.data, bus.fn)))
 bus <- flatten(bus.df)
 rm(bus.df)
-bus$cat <- sapply(bus$categories, toString)
 ```
+
+Convert lists to strings in data. 
+```{r}
+bus$cat <- sapply(bus$categories, toString) #unlist catagories
+bus$nabe <- sapply(bus$neighborhoods, toString) #unlist neighborhoods
+ListCols <- sapply(bus, is.list) #three variables are lists,  
+bus<-bus[!ListCols]## remove list variables, including accepts credit cards as unnecessary to analysis.
+bus_var<-names(bus) #get variable names
+bus_var<-make.names(bus_var) #make variable names compliant
+names(bus)<-bus_var
+```
+
 
 ```{r cache=TRUE, echo=FALSE}
 checkin.fn<-'yelp_academic_dataset_checkin.json'
@@ -41,7 +58,7 @@ rm(checkin.df)
 ```
 
 ```{r eval=FALSE, echo=FALSE, cache=TRUE}
-
+##NOT NEEDED 
 tip.fn<-'yelp_academic_dataset_tip.json'
 tip.df <- stream_in(file(file.path(dir.data, tip.fn)))
 tip<-tip.df
@@ -67,11 +84,8 @@ review<-review.df.flat
 
 Save files to RDS for future access. 
 ```{r eval=FALSE, echo=FALSE, cache=TRUE}
-saveRDS(bus.df.flat, file.path(dir.data, "bus.rds"))
-saveRDS(checkin.df.flat, file.path(dir.data, "checkin.rds"))
-saveRDS(review.df.flat, file.path(dir.data, "review.rds"))
+saveRDS(bus, file.path(dir.data, "bus.rds"))
 ```
-
 
 ## Exploratory plotting
 Build a basic map of the business data. 
@@ -89,15 +103,41 @@ set.seed(222)
 geo.cluster<-kmeans(bus[,c('longitude','latitude')],city.centres) #use kmeans to identify metro areas
 ```
 
-Subset by metro area. Explore data for Philadelphia. 
+Subset by metro area. 
 
 ```{r, echo=FALSE}
 bus_by_cluster <- as.data.frame(cbind(bus, geo.cluster$cluster)) #Merge cluster assignment back to business data
-buscl_5<-subset(bus, geo.cluster$cluster==5) #Pull data for Philadelphia
+bus_cl_1<-subset(bus, geo.cluster$cluster==1)#Edinburgh
+bus_cl_2<-subset(bus, geo.cluster$cluster==2)#Karlsruhe
+bus_cl_3<-subset(bus, geo.cluster$cluster==3)#Montreal
+bus_cl_4<-subset(bus, geo.cluster$cluster==4)#Waterloo
+bus_cl_5<-subset(bus, geo.cluster$cluster==5) #Pittsburgh
+bus_cl_6<-subset(bus, geo.cluster$cluster==6)#Charlotte
+bus_cl_7<-subset(bus, geo.cluster$cluster==7)#Urbana-Champaign
+bus_cl_8<-subset(bus, geo.cluster$cluster==8)#Phoenix
+bus_cl_9<-subset(bus, geo.cluster$cluster==9)#Las Vegas
+bus_cl_10<-subset(bus, geo.cluster$cluster==10)#Madison
+```
+ 
+Explore data for each city.  
+```{r}
+# Map Edinburgh data 
+m1 <- leaflet() %>%
+  addTiles() %>%  # Add default OpenStreetMap map tiles
+  addMarkers(lng=bus_cl_1$longitude, lat=bus_cl_1$latitude, popup=bus_cl_1$name)
+print(m1)
+
+#Map Pittsburgh data
 m5 <- leaflet() %>%
   addTiles() %>%  # Add default OpenStreetMap map tiles
-  addMarkers(lng=buscl_5$longitude, lat=buscl_5$latitude, popup=buscl_5$name)
+  addMarkers(lng=bus_cl_5$longitude, lat=bus_cl_5$latitude, popup=bus_cl_5$name)
 print(m5)
+
+#Map Phoenix data
+m8 <- leaflet() %>%
+  addTiles() %>%  # Add default OpenStreetMap map tiles
+  addMarkers(lng=bus_cl_8$longitude, lat=bus_cl_8$latitude, popup=bus_cl_8$name)
+print(m8)
 ```
 
 Checkout the checkin data set 
@@ -109,55 +149,78 @@ summary(checkin$total) #ignore NA's
 checkin$total<-rowSums(checkin[,3:170], na.rm = FALSE)
 summary(checkin$total)#include NA's
 
+##remove Na's
+nas<-is.na(checkin)
+checkin[nas]<-0
+
+##ensure compliant variable names 
+checkin_names<-names(checkin)
+checkin_names<-make.names(checkin_names)
+names(checkin)<-checkin_names
+
+##Create time label 
+time_label<-names(checkin[,3:170]) #get the names
+times<-gsub("checkin_info.", "", time_label)
+times<-gsub("-", ":", times)
+times<-gsub("$", "0", times)
+times<-hm(times)
+##http://astrostatistics.psu.edu/su07/R/html/base/html/strptime.html
+
 ```
 
+```{r}
+saveRDS(checkin, file.path(dir.data, "checkin.rds"))
+```
 
 
 Take a look for Philly businesses in the check-in data set. 
 
 ```{r}
-checkinpa<-buscl_5$business_id %in% checkin$business_id  #isolate the Philly bus id's in checkins. 
+checkinIDs_5<- checkin$business_id %in% bus_cl_5$business_id  #isolate the Philly bus id's in checkins. 
 
-checkcl_5<-checkin[checkinpa,] #subset to include matching ids. 
-percent_checkins_pa<-length(checkcl_5)/length(buscl_5)
-percent(percent_checkins_pa)
-checkcl_5$total<-rowSums(checkcl_5[,3:170], na.rm = FALSE)
-checkcl_5<-cbind(business_id=checkcl_5$business_id, total_checkins=checkcl_5$total)
-checkinpa<-merge(buscl_5, checkcl_5, by = "business_id")
-checkinpa$total_checkins<-as.numeric(checkinpa$total_checkins)
-quants<-quantile(checkinpa$total_checkins)
+check_cl_5<-checkin[checkinIDs_5,] #subset to include matching ids. 
+check_cl_5$total<-rowSums(check_cl_5[,3:170], na.rm = FALSE)#add total checkins for each row
+check_cl_5$total<-as.numeric(check_cl_5$total) #convert to numeric 
+quants<-quantile(check_cl_5$total) #check quantiles
 quants
 ```
+
+Merge datasets 
+
+```{r}
+# create a data sets that have business location and checkin time data for mapping
+merge_cl_5<-merge(bus_cl_5, check_cl_5, by="business_id") #only businesses with checkins
+join_cl_5<-full_join(bus_cl_5, check_cl_5, by="business_id") #all businesses 
+
+```
+
 
 Map checkin points to see if they are grouped in anyway. 
 
 ```{r}
+#Map of Pittsburgh checkin data 
 m5_checkins <- leaflet() %>%
   addTiles() %>%  # Add default OpenStreetMap map tiles
-  addCircleMarkers(lng=checkinpa$longitude, lat=checkinpa$latitude, popup=checkinpa$name, color = c('red'), stroke = FALSE, fillOpacity = 0.5, radius = 2, group = "Check-ins")
+  addCircleMarkers(lng=merge_cl_5$longitude, lat=merge_cl_5$latitude, popup=merge_cl_5$name, color = c('red'), stroke = FALSE, fillOpacity = 0.5, radius = 2, group = "Check-ins")
 print(m5_checkins)
 ```
 
 High frequency checkins align with traffic arteries.
 
-Overlay checkins on all PA businesses. 
+Overlay checkins on all Pittsburgh businesses. 
 
 ```{r}
+#Map of Pittsburgh checkin data overlaid on all businesses
 m5_checkins <- leaflet() %>%
   addTiles() %>%  # Add default OpenStreetMap map tiles
-  addCircleMarkers(lng=buscl_5$longitude, lat=buscl_5$latitude, popup=buscl_5$name, color = c('blue'), stroke = FALSE, fillOpacity = 0.5, radius = 2, group = "All Businesses") %>%
-  addCircleMarkers(lng=checkinpa$longitude, lat=checkinpa$latitude, popup=checkinpa$name, color = c('red'), stroke = FALSE, fillOpacity = 0.5, radius = 2, group = "Check-ins")
+  addCircleMarkers(lng=bus_cl_5$longitude, lat=bus_cl_5$latitude, popup=bus_cl_5$name, color = c('blue'), stroke = FALSE, fillOpacity = 0.5, radius = 2, group = "All Businesses") %>%
+  addCircleMarkers(lng=merge_cl_5$longitude, lat=merge_cl_5$latitude, popup=merge_cl_5$name, color = c('red'), stroke = FALSE, fillOpacity = 0.5, radius = 2, group = "Check-ins")
 print(m5_checkins)
 ```
 
 Interesting. Some businesses have checkin's and some do not. What are the factors that correlate highly with checkins? What factors have a low correlation with checkins? How can business owners benchmark the number of checkins they should expect conditioned on location and business category? Or, conditioned on businesses that are most like them? 
 
-Steps: 
-1) Build a data file that aggregates checkins for each businesses and includes businesses that have no checkins. 
-1. Check on data time period. 
-Unfortunately there are no datetime stamps included in the checkin data. Check other data sets to see what timeframe they represent. 
-
-```{r} 
+```{r eval=FALSE, echo=FALSE} 
 ## find out what period of time the review data was collected in. 
 review$date<-ymd(review$date)
 min(review$date)
@@ -171,7 +234,7 @@ start.yelp<-(ymd("2010-01-15"))
 ```
 
 
-```{r} 
+```{r eval=FALSE, echo=FALSE} 
 ## find out what period of time the tip data was collected in. 
 tip$date<-ymd(tip$date)
 min(tip$date)
@@ -186,21 +249,9 @@ end - start
 
 The reviews were collected between the period of Oct. 10, 2004 and Jan. 8, 2015 (10 years and 3 months). Tip data starts in April 15, 2009 and ends on Jan 22, 2015. This roughly corresponds to the period that yelp made its mobile apps available (2008 onwards).  However, Yelp didn't introduce it's checkin feature on the iphone until Jan 15, 2010. So the time period covered can only be just shy of 5 years (4.984 years). 
 
-Therefore, for the purposes of this analysis, we're going to assume that the checkin data is "cumulative" and assume the data covers a 5-year period. Good for interpreting active times, but not for predicting business info, because you can't convert the data into a rate for the specific business as you don't have data on how long businesses have been on Yelp. And the length of time a business has been on yelp is very likely to impact the number of reviews, checkins and tips it has recieved cumulatively.  
+Therefore, for the purposes of this analysis, we're going to assume that the checkin data covers just the period of one 24-hr day. Good for interpreting active times, but not for predicting business info because you don't have cumulative info or info on how long the business has been on Yelp.  
 
-Ok, so using the time data, what can we do? Well we can compare the time data to the location of the checkin by cross referencing the business location. Start by mapping just one time range. 
-
-```{r}
-
-m5_checkins <- leaflet() %>%
-  addTiles() %>%  # Add default OpenStreetMap map tiles
-  addCircleMarkers(lng=buscl_5$longitude, lat=buscl_5$latitude, popup=buscl_5$name, color = c('blue'), stroke = FALSE, fillOpacity = 0.5, radius = 2, group = "All Businesses") %>%
-  addCircleMarkers(lng=checkinpa$longitude, lat=checkinpa$latitude, popup=checkinpa$name, color = c('red'), stroke = FALSE, fillOpacity = 0.5, radius = 2, group = "Check-ins")
-print(m5_checkins)
-
-```
-
-
+Ok, so using the time data, what can we do? Well we can compare the time data to the location of the checkin by cross referencing the business location. 
 
 QUESTION: 
 Can I predict what area of the city will get the most check-in's at any given time? Then create a time-series map that allows users to find what will most likely be the most active or least active places in a city at a given time? 
@@ -211,27 +262,268 @@ Added bonus: Trace a map through the city for maximum exposure in any given day.
 
 STEPS: 
 
-1) Build the write data frame 
+1) Build the right data frame 
  - summarize checkin data by location. 
      
 2) Map the place/s that has the most checkin's at a given time.   
 
 
-     
+Start by mapping just one time range. 
+
+```{r}
+
+m5_tsample <- leaflet() %>%
+  addTiles() %>%  # Add default OpenStreetMap map tiles
+        
+  addCircleMarkers(lng=bus_cl_5$longitude, lat=bus_cl_5$latitude, popup=bus_cl_5$name, color = c('blue'), stroke = FALSE, fillOpacity = 0.5, radius = 2, group = "All Businesses") %>%
+        
+        addCircleMarkers(lng=merge_cl_5$longitude[merge_cl_5$checkin_info.17.6>0], lat=merge_cl_5$latitude[merge_cl_5$checkin_info.17.6>0], popup=merge_cl_5$name[merge_cl_5$checkin_info.17.6>0], color = c('black'), stroke = FALSE, fillOpacity = 0.5, radius = 2, group = "At 6:00pm")%>%
+        
+          addCircleMarkers(lng=merge_cl_5$longitude[merge_cl_5$checkin_info.13.3>0], lat=merge_cl_5$latitude[merge_cl_5$checkin_info.13.3>0], popup=merge_cl_5$name[merge_cl_5$checkin_info.13.3>0], color = c('green'), stroke = FALSE, fillOpacity = 0.5, radius = 2, group = "At 3:30pm") 
+
+  addCircleMarkers(lng=merge_cl_5$longitude[merge_cl_5$checkin_info.0.3>0], lat=merge_cl_5$latitude[merge_cl_5$checkin_info.0.3>0], popup=merge_cl_5$name[merge_cl_5$checkin_info.0.3>0], color = c('yellow'), stroke = FALSE, fillOpacity = 0.5, radius = 2, group = "At 3:30pm") 
+        
+print(m5_tsample)
+```
+
+Next, find the busiest time of day given a location. 
+
+```{r}
+## find the busiest time of day for a given location. 
+##times = variables 106:273
+location<-merge_cl_5[40, ] #select a location
+time<-apply(merge_cl_5[40,106:273], 2, sum) #checkins at each time 
+busy<-max(time) #max number of checkins
+busiest_time<-time[time==busy] #subset the time periods to include only the busiest times. 
+busiest_time
+```
+
+Mark the selected location and the nearby checkins. 
+
+```{r}
+
+m5_busytime <- leaflet() %>%
+  addTiles() %>%  # Add default OpenStreetMap map tiles
+        
+  addCircleMarkers(lng=bus_cl_5$longitude, lat=bus_cl_5$latitude, popup=bus_cl_5$name, color = c('blue'), stroke = FALSE, fillOpacity = 0.5, radius = 2, group = "All Businesses") %>% #add all businesses
+        
+        addMarkers(lng=merge_cl_5[40,]$longitude, lat=merge_cl_5[40,]$latitude, popup=merge_cl_5[40,]$name)%>% #add the selected location 
+
+  addCircleMarkers(lng=merge_cl_5$longitude[merge_cl_5$checkin_info.11.3>0], lat=merge_cl_5$latitude[merge_cl_5$checkin_info.11.3>0], popup=merge_cl_5$name[merge_cl_5$checkin_info.11.3>0], color = c('yellow'), stroke = FALSE, fillOpacity = 0.5, radius = 2, group = "At 11:30pm") #add the checkin info for that time period
+        
+print(m5_busytime)
+```
+
+Next, given a time, find the busiest location.  
+
+```{r}
+sel_time<-merge_cl_5[,120] #select a time period
+no_checkins<-sapply(merge_cl_5[,120],sum) #sum the checkins for the time period over each location 
+max<-max(no_checkins) #find the maximum number of checkins for time period
+busiest_place<-merge_cl_5[,120]==max # find the locations with the most checkins
+merge_cl_5[busiest_place,]$name #find the names/s of the businesses with the most checkins
+```
+
+Map the busiest location given the time. 
+
+```{r}
+
+m5_busyplace <- leaflet() %>%
+  addTiles() %>%  # Add default OpenStreetMap map tiles
+        
+  addCircleMarkers(lng=bus_cl_5$longitude, lat=bus_cl_5$latitude, popup=bus_cl_5$name, color = c('blue'), stroke = FALSE, fillOpacity = 0.5, radius = 2, group = "All Businesses") %>% #add all businesses
+        
+        addMarkers(lng=merge_cl_5[busiest_place,]$longitude, lat=merge_cl_5[busiest_place,]$latitude, popup=merge_cl_5[busiest_place,]$name)%>% #add the selected location 
+  addCircleMarkers(lng=merge_cl_5$longitude[merge_cl_5$checkin_info.13.1>0], lat=merge_cl_5$latitude[merge_cl_5$checkin_info.13.1>0], popup=merge_cl_5$name[merge_cl_5$checkin_info.13.1>0], color = c('yellow'), stroke = FALSE, fillOpacity = 0.5, radius = 2, group = "At 1:30pm") #add the checkin info for that time period
+        
+print(m5_busyplace)
+```
+
+Ok looking at the data, there is probably some adjustment to be made for the day of the week/season that the checkin was made. That information is not available. The results will be skewed by this. We're assuming the checkin data represents a 24-hour period (1 day). (i.e. Because the gym, "LA Fitness" got so many checkins in the middle of the day, it may be a weekend, but there is no way to adjust for this.)
+
+Ok, we could build a prediction model based on just one city or on all cities. To start, let's build the model on just one city, sticking with Pittsburgh as our example. 
+
+##Subset and merge data for model
+
+```{r}
+#Get business Ids and location info from business data for cluster 5 (Pittsburgh). 
+bus_loc_cl_5<-select(bus_cl_5, c(business_id, latitude, longitude))
+
+#merge location data with checkin data for cluster 5 
+dt<- full_join(bus_loc_cl_5, check_cl_5, by="business_id") #all businesses 
+
+#input NAs to "no.checkin" for variable type (checkin_status)
+checkin_status<-dt$type
+nas<-is.na(checkin_status)
+checkin_status[nas]<-"no.checkin"
+dt$type<-checkin_status 
+
+#input Nas to "0" for businesses with no checkin data
+nas<-is.na(dt)
+dt[nas]<-0
+```
+
+## Use only data with checkin information
+
+```{r}
+dt<- merge(bus_loc_cl_5, check_cl_5, by="business_id")
+test<-is.na(dt)
+#sum(test)
+#test<-nlevels(as.factor(dt$type))
+#test
+
+```
+
+## Build Prediction Model 
+
+```{r}
+set.seed(222)
+
+#training set to 60% for medium sized data sets
+inTrain<-createDataPartition(dt$type, p=0.6, list=FALSE)
+
+#create training and test sets 
+training<-dt[inTrain,]
+testing<-dt[-inTrain,]
+
+#remove unnecessary, non-numeric vectors from the data 
+training<-select(training, -c(type, business_id))
+
+```
+
+#fit the model with the complete location data 
+
+```{r}
+
+ctrl <- trainControl(allowParallel=T, method="cv", number=4) ## do 4-fold cross validation with parallel processing
+
+#using checkins to predict location 
+fit1 <- train(longitude  ~ ., data=training, trControl=ctrl, method="glm") 
+#AIC=8742
+fit2 <- train(latitude  ~ ., data=training, trControl=ctrl, method="glm") ## fit model with general linear regression
+
+#use longlat to predict checkins
+fit3 <- train(total ~ ., data=training, trControl=ctrl, method="glm") ## fit model with general linear regression
+
+#use longlat to predict total checkins in a general linear model. 
+fit4 <- train(total ~ longitude + latitude, data=training, trControl=ctrl, method="glm") ## fit model with general linear regression
+
+#use longlat to predict total checkins in a Random Forests model.
+fit5 <- train(total ~ longitude + latitude, data=training, trControl=ctrl, method="rf")
+
+```
+
+#fit a model with only location data that has checkin information
+```{r}
+
+#use longlat to predict total checkins in a general linear model. 
+fit6 <- train(total ~ longitude + latitude, data=training, trControl=ctrl, method="glm") ## fit model with general linear regression
+
+#use longlat to predict total checkins in a Random Forests model.
+fit7 <- train(total ~ longitude + latitude, data=training, trControl=ctrl, method="rf")
+
+```
 
 
+#Check accuracy of model with complete location data  
 
-2) Include other factors that are available in the bus file. Look at other files to see if there may be factors that are of interest. 
-3) Build a prediction model that finds like businesses (regression? How to test?)
+```{r}
+prediction1 <- predict(fit1, newdata=training)
+acc_test1<-sum(round(prediction1, digits = 0) == training$longitude) / length(prediction1)
+percent(acc_test1)
 
-4) Understand time series data for checkins. Is it seasonal? 
+prediction2 <- predict(fit2, newdata=training)
+acc_test2<-sum(round(prediction2, digits=0) == training$latitude) / length(prediction2)
+percent(acc_test2) 
 
-5) Build code that averages check in data for like businessses and generates a prediction of average checkins/time period 
+prediction3 <- predict(fit3, newdata=training)
+acc_test3<-sum(round(prediction3, digits=0) == training$total) / length(prediction3)
+percent(acc_test3) 
+
+prediction4 <- predict(fit4, newdata=training)
+acc_test4<-sum(round(prediction4, digits=0) == training$total) / length(prediction4)
+percent(acc_test4)
+
+prediction5 <- predict(fit5, newdata=training)
+acc_test5<-sum(round(prediction5, digits=0) == training$total) / length(prediction5)
+percent(acc_test5)
+
+```
+
+#Check accuracy of model using only location data with checkin information 
+
+```{r}
+
+prediction6 <- predict(fit6, newdata=training)
+acc_test6<-sum(round(prediction6, digits=0) == training$total) / length(prediction6)
+percent(acc_test6)
+
+prediction7 <- predict(fit7, newdata=training)
+acc_test7<-sum(round(prediction7, digits=0) == training$total) / length(prediction7)
+percent(acc_test7)
+
+```
+
+The GLM provides the best results, but with only `r percent(acc_test6)` accuracy. The model is producing results that have much lower standard deviation than the original set. In addition, it skews high on the low end of the scale, giving a false sense of potential traffic at a location. 
+
+```{r}
+plot(prediction6, training$total)
+summary(prediction6)
+summary(training$total)
+sd(prediction6)
+sd(training$total)
+```
+
+#Fit GLM model against test set  
+
+```{r}
+
+prediction <- predict(fit6, newdata=testing)
+acc_test<-sum(round(prediction, digits=0) == testing$total) / length(prediction)
+percent(acc_test)
+```
+
+This model is not able to forecast location based on checkin data or checkin totals based on location. The p-values are very high indicating that the results may as well be random. There is little statistical significance. This is likely because the model is not recognizing the spatial/time nature of the data. Including all factors in the model, shows that a few times do result in statistically significant outcomes, such as midnight on Saturday, for example. So the low accuracy could also be result of a lack of datapoints.  
+
+##convert dataframe to spatialpoints data frame for map modeling 
+
+```{r}
+#Proj4js.defs["EPSG:26917"] = "+proj=utm +zone=17 +ellps=GRS80 +datum=NAD83 +units=m +no_defs";
+#Source = http://spatialreference.org/ref/epsg/nad83-utm-zone-17n/
+#Lookup = 
+
+x=dt$longitude
+y=dt$latitude
+coords = cbind(x, y)
+sp = SpatialPoints(coords, proj4string = CRS("+proj=longlat +zone=17 +datum=NAD83"))
+data<-select(dt, -c(latitude, longitude))
+spdf = SpatialPointsDataFrame(sp, data)
+```
+
+Map spdf object 
+```{r}
+headdata<-spdf[1:10,]
+
+#Map sampdata
+m6 <- leaflet(data = headdata) %>%
+  addTiles() %>%  # Add default OpenStreetMap map tiles
+  addMarkers(popup=~type)
+print(m6)
+
+m7 <- leaflet(data = headdata) %>%
+  addTiles() %>%  # Add default OpenStreetMap map tiles
+  addMarkers(popup=~total>50)
+print(m7)
+```
+
+
 
 
 NOTES:
 rgeos::gDistance dist parameter for a cutoff distance. 
 Would be good to add a layer for commercial zoning. Would be interesting to condition checkins on weather /seasonality. 
+
+SLUSH: 
 
 
 

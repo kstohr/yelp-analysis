@@ -1,0 +1,15 @@
+base
+knitr
+jsonlite
+dplyr
+ggplot2
+ggmap
+leaflet
+scales
+lubridate
+reshape2
+lattice
+caret
+sp
+gstat
+automap

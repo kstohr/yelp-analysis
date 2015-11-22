@@ -1,0 +1,192 @@
+Yelp Challenge Dataset: Geospatial Modeling of Checkin Locations
+========================================================
+author: Kate Stohr
+date: 11/22/15
+
+Location Mapping of Checkin Data 
+========================================================
+
+Often people need to know the most active areas of a city. Because checkins are a reflection of an individual at a specific location at a specific time, it's a reasonable proxy for foot traffic. This project uses geospatial modeling to predict the number of checkins at a given location. Applications include: 
+- optimizing sales events and offers to increase foot traffic at a business location
+- planning canvasing routes (sales, outreach, political campaigns)
+- identifying the best location for an event at a given time 
+- estimating foot traffic for forecasting and and commercial real estate valuation.
+
+Data source: http://www.yelp.com/dataset_challenge
+
+Checkin Locations for Pittsburgh, PA
+========================================================
+
+Using Pittsburgh, PA as an example, checkin data overlayed against information for all Yelp listed businesses in the city shows a strong relationship between businesses with checkins and major traffic arteries. 
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+options(digits=4, scipen=999)
+setwd("~/Documents/Coursera/Capstone/yelp-analysis")
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+library(jsonlite)
+library(dplyr)
+library(ggmap)
+library(leaflet)
+#library(maps)
+library(scales)
+library(lubridate)
+library(reshape2)
+library(caret)
+#library(randomForest)
+library(sp)
+##library(geoR)
+##library(xts)
+##library(spacetime)
+library(gstat)
+library(automap)
+
+dir.data <-file.path('.', 'data', 'yelp_dataset_challenge_academic_dataset')
+```
+
+
+```{r cache=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+#load business data 
+bus.fn<-'yelp_academic_dataset_business.json'
+bus.df <- stream_in(file(file.path(dir.data, bus.fn)), verbose = FALSE)
+bus <- flatten(bus.df) #flatten nested variables
+rm(bus.df)
+```
+
+```{r cache=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+#load checkin data 
+checkin.fn<-'yelp_academic_dataset_checkin.json'
+checkin.df <- stream_in(file(file.path(dir.data, checkin.fn)), verbose = FALSE)
+checkin <- flatten(checkin.df) #flatten nested variables
+rm(checkin.df)
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#Preprocess the data
+#Convert lists to strings in data. 
+
+bus$cat <- sapply(bus$categories, toString) #unlist catagories
+bus$nabe <- sapply(bus$neighborhoods, toString) #unlist neighborhoods
+ListCols <- sapply(bus, is.list) #three variables are lists,  
+bus<-bus[!ListCols]## remove list variables, including accepts credit cards as unnecessary to analysis.
+bus_var<-names(bus) #get variable names
+bus_var<-make.names(bus_var) #make variable names compliant
+names(bus)<-bus_var
+```
+
+```{r eval=FALSE, echo=FALSE, cache=TRUE, message=FALSE, warning=FALSE}
+#Save file to RDS for future access. 
+#saveRDS(bus, file.path(dir.data, "bus.rds"))
+```
+
+```{r, cache=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+#identify metro areas by kmeans clustering
+cities<-c('Edinburgh, UK', 'Karlsruhe, Germany', 'Montreal, Canada', 'Waterloo, Canada', 'Pittsburgh, PA', 'Charlotte, NC', 'Urbana-Champaign, IL', 'Phoenix, AZ', 'Las Vegas, NV', 'Madison, WI')#Cities included in the dataset 
+city.centres<-geocode(cities) #identify longlat of city centers 
+set.seed(222)
+geo.cluster<-kmeans(bus[,c('longitude','latitude')],city.centres) #use kmeans to identify metro areas
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+#subset by metro area 
+
+bus_by_cluster <- as.data.frame(cbind(bus, geo.cluster$cluster)) #serge cluster assignment back to business data
+
+bus_cl_5<-subset(bus, geo.cluster$cluster==5) #select Pittsburgh
+rm(bus_by_cluster)
+```
+ 
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#Process the checkin data set
+#remove Na's
+nas<-is.na(checkin)
+checkin[nas]<-0
+
+#ensure compliant variable names 
+checkin_names<-names(checkin)
+checkin_names<-make.names(checkin_names)
+names(checkin)<-checkin_names
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#save a list of time labels for conversion 
+time_labels<-names(checkin)
+time_labels<-time_labels[3:168]
+write.csv("time_labels", "time_labels")
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#Save checkin file 
+#saveRDS(checkin, file.path(dir.data, "checkin.rds"))
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#merge Pittsburgh business data with checkin data by "business id" 
+checkinIDs_5<- checkin$business_id %in% bus_cl_5$business_id  #isolate the Philly bus id's in checkins. 
+
+check_cl_5<-checkin[checkinIDs_5,] #subset to include matching ids.
+total<-apply(check_cl_5[,3:170],1,sum)#get the total for each row
+#sd(total)
+#avg<-apply(check_cl_5[,3:170],1,mean)
+#mean(avg)
+#max<-apply(check_cl_5[,3:170],1,max)
+#sd<-apply(check_cl_5[,3:170],1,sd)
+#mean(max)
+#check_cl_5<-mutate(check_cl_5, avg=avg, max=max, std.deviation=sd, total=total) #convert to numeric 
+check_cl_5<-mutate(check_cl_5, total=total)
+#quants<-quantile(check_cl_5$total) #check quantiles
+#quants
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# merge Pittsburth data
+merge_cl_5<-merge(bus_cl_5, check_cl_5, by="business_id") #only businesses with checkins
+join_cl_5<-full_join(bus_cl_5, check_cl_5, by="business_id") #all businesses 
+
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#Map of Pittsburgh checkin data overlaid on all businesses
+m5_checkins <- leaflet() %>%
+  addTiles() %>%  # Add default OpenStreetMap map tiles
+  addCircleMarkers(lng=bus_cl_5$longitude, lat=bus_cl_5$latitude, popup=bus_cl_5$name, color = c('blue'), stroke = FALSE, fillOpacity = 0.5, radius = 2, group = "All Businesses") %>%
+  addCircleMarkers(lng=merge_cl_5$longitude, lat=merge_cl_5$latitude, popup=merge_cl_5$name, color = c('red'), stroke = FALSE, fillOpacity = 0.5, radius = 2, group = "Check-ins")
+print(m5_checkins)
+```
+
+Identify Hotspots
+========================================================
+The tool uses geospatial modeling to estimate checkin values for a given location. Users can select a time, and the tool returns the location likely to be busiest at that time.  
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+sel_time<-merge_cl_5[,120] #select a time period
+no_checkins<-sapply(merge_cl_5[,120],sum) #sum the checkins for the time period over each location 
+max<-max(no_checkins) #find the maximum number of checkins for time period
+busiest_place<-merge_cl_5[,120]==max # find the locations with the most checkins
+merge_cl_5[busiest_place,]$name #find the names/s of the businesses with the most checkins
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+m5_busyplace <- leaflet() %>%
+  addTiles() %>%  # Add default OpenStreetMap map tiles
+        
+  addCircleMarkers(lng=bus_cl_5$longitude, lat=bus_cl_5$latitude, popup=bus_cl_5$name, color = c('blue'), stroke = FALSE, fillOpacity = 0.5, radius = 2, group = "All Businesses") %>% #add all businesses
+        
+        addMarkers(lng=merge_cl_5[busiest_place,]$longitude, lat=merge_cl_5[busiest_place,]$latitude, popup=merge_cl_5[busiest_place,]$name)%>% #add the selected location 
+  addCircleMarkers(lng=merge_cl_5$longitude[merge_cl_5$checkin_info.13.1>0], lat=merge_cl_5$latitude[merge_cl_5$checkin_info.13.1>0], popup=merge_cl_5$name[merge_cl_5$checkin_info.13.1>0], color = c('yellow'), stroke = FALSE, fillOpacity = 0.5, radius = 2, group = "At 1:30pm") #add the checkin info for that time period
+        
+print(m5_busyplace)
+```
+
+Estimate Checkins
+========================================================
+
+Additional potential features:
+- ability to model checkins in a time series. 
+- ability to map routes with most or least checkins for route planning.
+
+Please note: Tool created using Leaflet, which does not display inline in R Presentations. Captured images and data used in presentation for display purposes. 
+
+**To view interactive maps and code, visit: https://github.com/kstohr/yelp-analysis**
+
