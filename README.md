@@ -7,3 +7,5 @@ To view the presentation, file go here:
 [http://kstohr.github.io/yelp-analysis/YelpGeoAnalysis.Rpres] 
 
 [http://kstohr.github.io/yelp-analysis/cap_yelp_project.html]
+
+[http://kstohr.github.io/yelp-analysis/YelpGeoAnalysis-rpubs.html]
