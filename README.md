@@ -6,3 +6,4 @@ To view the report go here: [http://kstohr.github.io/yelp-analysis/cap_yelp_geom
 To view the presentation, file go here: 
 [http://kstohr.github.io/yelp-analysis/YelpGeoAnalysis.Rpres] 
 
+[http://kstohr.github.io/yelp-analysis/cap_yelp_project.html]
