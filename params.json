@@ -1,6 +1,6 @@
 {
   "name": "Yelp-analysis",
   "tagline": "Yelp Data Challenge",
-  "body": "# yelp-analysis\r\nYelp Challenge Data Set: Geospatial Analysis of Checkin Data \r\n\r\nTo view the report go here: [https://github.com/kstohr/yelp-analysis/blob/master/cap_yelp_geomodel.Rmd] \r\n(Variogram Modeling of Checkin Data in Yelp Challenge Data Set)\r\n\r\nTo view the presentation, file go here: \r\n\r\n",
+  "body": "# yelp-analysis\r\nYelp Challenge Data Set: Geospatial Analysis of Checkin Data \r\n\r\nTo view the report go here: [http://kstohr.github.io/yelp-analysis/cap_yelp_geomodel.Rmd] \r\n(Variogram Modeling of Checkin Data in Yelp Challenge Data Set)\r\nTo view the presentation, file go here: \r\n[http://kstohr.github.io/yelp-analysis/YelpGeoAnalysis.Rpres] \r\n\r\n[http://kstohr.github.io/yelp-analysis/cap_yelp_project.html]\r\n",
   "note": "Don't delete this file! It's used internally to help with page regeneration."
 }
